@@ -1,0 +1,125 @@
+#!/bin/bash
+# Shrink QuickTime screen recordings into something you can attach to a PR.
+#
+# QuickTime records at the display's native resolution and refresh rate and
+# offers no setting for either, so a Retina + ProMotion Mac writes 4096x2480 at
+# 120fps — roughly 1MB per second. Fitting to 1080p at 24fps is a ~20x saving
+# with no visible loss on UI footage.
+#
+# Originals are never modified. Output goes to a Compressed/ subfolder as .mp4.
+
+set -uo pipefail
+
+readonly CONFIG_FILE="${SHRINK_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/shrink-screen-recordings.conf}"
+
+# Defaults. Overridden by the config file, then by flags.
+SRC_DIR="$HOME/Documents/Screen Recordings"
+MAX_WIDTH=1920
+MAX_HEIGHT=1080
+FPS=24
+CRF=23
+KEEP_AUDIO=yes
+
+# shellcheck source=/dev/null
+[ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
+
+usage() {
+  cat <<USAGE
+Usage: shrink-screen-recordings [options]
+
+Transcodes every .mov in the source folder that has no up-to-date .mp4 in
+its Compressed/ subfolder. Safe to re-run; already-converted files are skipped.
+
+Options:
+  -d, --dir PATH      source folder (default: $SRC_DIR)
+  -w, --width N       max width in pixels (default: $MAX_WIDTH)
+  -h, --height N      max height in pixels (default: $MAX_HEIGHT)
+  -f, --fps N         output frame rate (default: $FPS)
+  -q, --crf N         x264 quality, lower is better, 18-28 sensible (default: $CRF)
+      --no-audio      drop the audio track
+      --force         re-transcode even if an up-to-date .mp4 exists
+      --help          this text
+
+The frame is fitted inside width x height, keeping aspect ratio, and is never
+upscaled.
+
+Config file (optional): $CONFIG_FILE
+  Shell assignments, e.g.
+    MAX_WIDTH=1280
+    FPS=30
+    CRF=26
+USAGE
+}
+
+FORCE=no
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d|--dir)    SRC_DIR="${2:?--dir needs a path}"; shift 2 ;;
+    -w|--width)  MAX_WIDTH="${2:?--width needs a number}"; shift 2 ;;
+    -h|--height) MAX_HEIGHT="${2:?--height needs a number}"; shift 2 ;;
+    -f|--fps)    FPS="${2:?--fps needs a number}"; shift 2 ;;
+    -q|--crf)    CRF="${2:?--crf needs a number}"; shift 2 ;;
+    --no-audio)  KEEP_AUDIO=no; shift ;;
+    --force)     FORCE=yes; shift ;;
+    --help)      usage; exit 0 ;;
+    *)           echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+command -v ffmpeg >/dev/null || {
+  echo "shrink-screen-recordings: ffmpeg not on PATH (brew install ffmpeg)" >&2
+  exit 1
+}
+
+[ -d "$SRC_DIR" ] || {
+  echo "shrink-screen-recordings: no such folder: $SRC_DIR" >&2
+  exit 1
+}
+
+readonly OUT_DIR="$SRC_DIR/Compressed"
+mkdir -p "$OUT_DIR"
+
+# QuickTime writes progressively, so a file caught mid-save would transcode
+# truncated. Two identical byte counts a second apart means it has landed.
+is_settled() {
+  local first second
+  first=$(stat -f%z "$1" 2>/dev/null) || return 1
+  sleep 1
+  second=$(stat -f%z "$1" 2>/dev/null) || return 1
+  [ "$first" = "$second" ] && [ "$first" -gt 0 ]
+}
+
+audio_args=(-c:a aac -b:a 96k)
+[ "$KEEP_AUDIO" = no ] && audio_args=(-an)
+
+# min() against the input caps the fit box at the source size, so a recording
+# that is already small is never upscaled.
+readonly SCALE="scale=w='min($MAX_WIDTH,iw)':h='min($MAX_HEIGHT,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+
+shopt -s nullglob nocaseglob
+for src in "$SRC_DIR"/*.mov "$SRC_DIR"/*.mp4; do
+  [ "$(dirname "$src")" = "$OUT_DIR" ] && continue
+  name=$(basename "${src%.*}")
+  out="$OUT_DIR/$name.mp4"
+  [ "$src" = "$out" ] && continue
+
+  if [ "$FORCE" = no ] && [ -e "$out" ] && [ "$out" -nt "$src" ]; then
+    continue
+  fi
+  is_settled "$src" || continue
+
+  if ffmpeg -y -v error -i "$src" \
+    -vf "$SCALE,fps=$FPS" \
+    -c:v libx264 -crf "$CRF" -preset slow -pix_fmt yuv420p \
+    -movflags +faststart "${audio_args[@]}" \
+    "$out"; then
+    printf '%s  %5s -> %5s  %s\n' \
+      "$(date '+%H:%M:%S')" \
+      "$(du -h "$src" | cut -f1)" \
+      "$(du -h "$out" | cut -f1)" \
+      "$name.mp4"
+  else
+    echo "shrink-screen-recordings: failed on $src" >&2
+    rm -f "$out"
+  fi
+done

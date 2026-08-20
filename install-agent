@@ -1,0 +1,61 @@
+#!/bin/bash
+# Install (or remove) a LaunchAgent that converts each new recording as it lands.
+set -euo pipefail
+
+readonly LABEL="com.finwarman.shrink-screen-recordings"
+readonly PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT="$SCRIPT_DIR/shrink-screen-recordings"
+
+if [ "${1:-}" = "--uninstall" ]; then
+  launchctl unload "$PLIST" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "removed $LABEL"
+  exit 0
+fi
+
+# The watched folder has to match the one the script reads, config included.
+WATCH_DIR="$HOME/Documents/Screen Recordings"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/shrink-screen-recordings.conf"
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && SRC_DIR="" && source "$CONFIG" && [ -n "$SRC_DIR" ] && WATCH_DIR="$SRC_DIR"
+
+[ -d "$WATCH_DIR" ] || { echo "no such folder: $WATCH_DIR" >&2; exit 1; }
+
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$SCRIPT</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>$WATCH_DIR</string>
+  </array>
+  <key>StandardOutPath</key>
+  <string>$HOME/Library/Logs/shrink-screen-recordings.log</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/Library/Logs/shrink-screen-recordings.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>Nice</key>
+  <integer>5</integer>
+</dict>
+</plist>
+PLIST_EOF
+
+plutil -lint "$PLIST" >/dev/null
+launchctl unload "$PLIST" 2>/dev/null || true
+launchctl load "$PLIST"
+echo "installed $LABEL"
+echo "watching: $WATCH_DIR"
+echo "log:      $HOME/Library/Logs/shrink-screen-recordings.log"

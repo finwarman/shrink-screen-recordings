@@ -18,18 +18,20 @@ Originals are never modified. Output goes to a `Compressed/` subfolder as
 
 ## Assumes
 
-- Your recordings land in `~/Documents/Screen Recordings`. That is not
-  QuickTime's default — it saves to the Desktop until you change it in the
-  recording dialog. Point it wherever you like and set `SRC_DIR` in the config
-  file to match.
+- Your recordings land in `~/Movies/Screen Recordings`. That is not QuickTime's
+  default — it saves to the Desktop until you change it in the recording dialog,
+  and QuickTime has no setting for it outside that dialog. Point it wherever you
+  like and set `SRC_DIR` in the config file to match.
+- `~/Movies` rather than `~/Documents` on purpose: see
+  [the folder has to be readable](#the-folder-has-to-be-somewhere-macos-lets-an-agent-read).
 - `ffmpeg` is on your `PATH`: `brew install ffmpeg`
 
 ## Use
 
     shrink-screen-recordings
 
-Converts every `.mov` in `~/Documents/Screen Recordings` that doesn't already
-have an up-to-date `.mp4` in `Compressed/`. Safe to re-run.
+Converts every `.mov` in `~/Movies/Screen Recordings` that doesn't already have
+an up-to-date `.mp4` in `Compressed/`. Safe to re-run.
 
     shrink-screen-recordings --help
 
@@ -50,17 +52,11 @@ come back empty — so the agent runs on every new recording and converts nothin
 Running the command yourself still works, because your terminal has been granted
 access, which makes this an easy failure to miss.
 
-`install-agent` refuses to install against a protected folder for that reason.
-Keep recordings somewhere unprotected instead:
-
-    mkdir -p ~/Movies/"Screen Recordings"
-    echo 'SRC_DIR="$HOME/Movies/Screen Recordings"' >> ~/.config/shrink-screen-recordings.conf
-
-then point QuickTime at it and re-run `./install-agent`. Granting Full Disk
-Access to `/bin/bash` also works but is far too broad a permission for this.
-
-If you would rather leave the recordings in `~/Documents`, skip the agent and
-run the command by hand when you need it.
+`install-agent` refuses to install against a protected folder for that reason,
+which is why the default is `~/Movies/Screen Recordings`. If you keep recordings
+in `~/Documents` anyway, skip the agent and run the command by hand — granting
+Full Disk Access to `/bin/bash` also works, but is far too broad a permission
+for this.
 
 ## Configuration
 
@@ -70,7 +66,7 @@ Flags win over the config file, which wins over the defaults.
 
 Shell assignments:
 
-    SRC_DIR="$HOME/Documents/Screen Recordings"
+    SRC_DIR="$HOME/Movies/Screen Recordings"
     MAX_WIDTH=1920
     MAX_HEIGHT=1080
     FPS=24
@@ -83,9 +79,15 @@ crisper than an arbitrary width, because it lands on exact logical pixels.
 
 ## Notes
 
-Recordings are written progressively, so the script waits for a file's byte
-count to stop changing before touching it. Without that, a recording caught
-mid-save transcodes truncated.
+Recordings are written progressively, so the script waits for a file to be
+closed and its byte count to settle before touching it. Without that, a
+recording caught mid-save transcodes truncated.
+
+Byte count alone is not enough. A still screen encodes to almost nothing, so a
+recording sitting on static content can hold the same size for seconds and look
+finished — and if that partial transcode lands after the recording ends, the
+truncated output looks up to date and never gets redone. Whoever is recording
+still holds the file open, so that is the primary signal.
 
 It has to *wait* rather than skip and retry later. A directory watch only fires
 when an entry is created or removed — appending to an existing file leaves the

@@ -15,7 +15,7 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 # The watched folder has to match the one the script reads, config included.
-WATCH_DIR="$HOME/Documents/Screen Recordings"
+WATCH_DIR="$HOME/Movies/Screen Recordings"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/shrink-screen-recordings.conf"
 # shellcheck source=/dev/null
 [ -f "$CONFIG" ] && SRC_DIR="" && source "$CONFIG" && [ -n "$SRC_DIR" ] && WATCH_DIR="$SRC_DIR"

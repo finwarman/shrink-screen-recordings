@@ -13,7 +13,9 @@ set -uo pipefail
 readonly CONFIG_FILE="${SHRINK_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/shrink-screen-recordings.conf}"
 
 # Defaults. Overridden by the config file, then by flags.
-SRC_DIR="$HOME/Documents/Screen Recordings"
+# ~/Movies rather than ~/Documents: the LaunchAgent cannot read TCC-protected
+# folders, so a default under Documents would break the automatic mode.
+SRC_DIR="$HOME/Movies/Screen Recordings"
 MAX_WIDTH=1920
 MAX_HEIGHT=1080
 FPS=24
@@ -104,7 +106,16 @@ wait_until_settled() {
   local file=$1 last=-1 size stable=0 waited=0
   while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
     size=$(stat -f%z "$file" 2>/dev/null) || return 1
-    if [ "$size" = "$last" ]; then
+
+    # A still screen encodes to almost nothing, so a recording paused on static
+    # content can hold the same byte count for seconds. Size alone would call
+    # that finished and transcode a partial file — and if that transcode lands
+    # after the recording ends, the truncated result looks up to date and is
+    # never redone. Whoever is recording still holds the file open, so ask that
+    # instead and treat size as the secondary signal.
+    if lsof -t -- "$file" >/dev/null 2>&1; then
+      stable=0
+    elif [ "$size" = "$last" ]; then
       stable=$((stable + 1))
       if [ "$stable" -ge "$SETTLE_STABLE_SECONDS" ] && [ "$size" -gt 0 ]; then
         return 0
@@ -112,6 +123,7 @@ wait_until_settled() {
     else
       stable=0
     fi
+
     last=$size
     sleep 1
     waited=$((waited + 1))

@@ -22,6 +22,32 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/shrink-screen-recordings.conf"
 
 [ -d "$WATCH_DIR" ] || { echo "no such folder: $WATCH_DIR" >&2; exit 1; }
 
+# ~/Documents, ~/Desktop and ~/Downloads are TCC-protected. A launchd agent
+# gets no prompt and no error there — directory reads just come back empty, so
+# the agent runs forever converting nothing. Refuse rather than install that.
+case "$WATCH_DIR/" in
+  "$HOME/Documents/"*|"$HOME/Desktop/"*|"$HOME/Downloads/"*)
+    cat >&2 <<WARN
+$WATCH_DIR is in a folder macOS protects (Documents, Desktop, Downloads).
+
+A LaunchAgent cannot read those. It is denied silently — no prompt, no error,
+directory listings just come back empty — so the agent would run and convert
+nothing. Running the command by hand from your terminal still works, because
+your terminal has been granted access.
+
+Either:
+  1. Keep the recordings somewhere unprotected, e.g. ~/Movies/Screen Recordings,
+     point QuickTime at it, and set SRC_DIR in
+     ${XDG_CONFIG_HOME:-\$HOME/.config}/shrink-screen-recordings.conf
+  2. Or grant Full Disk Access to /bin/bash in System Settings > Privacy &
+     Security. This is broad and not recommended.
+
+Re-run with --force to install anyway.
+WARN
+    [ "${1:-}" = "--force" ] || exit 1
+    ;;
+esac
+
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -38,6 +64,11 @@ cat > "$PLIST" <<PLIST_EOF
   <array>
     <string>$WATCH_DIR</string>
   </array>
+  <!-- The watch fires when a recording is created, which is the run that waits
+       it out. This is the net for events that happen while logged out or
+       asleep; with nothing to do the script exits immediately. -->
+  <key>StartInterval</key>
+  <integer>600</integer>
   <key>StandardOutPath</key>
   <string>$HOME/Library/Logs/shrink-screen-recordings.log</string>
   <key>StandardErrorPath</key>

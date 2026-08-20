@@ -19,6 +19,10 @@ MAX_HEIGHT=1080
 FPS=24
 CRF=23
 KEEP_AUDIO=yes
+# A recording still being written is waited out, not skipped. Give up after
+# this many seconds so a file being appended to forever can't pin the process.
+SETTLE_TIMEOUT=10800
+SETTLE_STABLE_SECONDS=3
 
 # shellcheck source=/dev/null
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
@@ -79,14 +83,40 @@ command -v ffmpeg >/dev/null || {
 readonly OUT_DIR="$SRC_DIR/Compressed"
 mkdir -p "$OUT_DIR"
 
-# QuickTime writes progressively, so a file caught mid-save would transcode
-# truncated. Two identical byte counts a second apart means it has landed.
-is_settled() {
-  local first second
-  first=$(stat -f%z "$1" 2>/dev/null) || return 1
-  sleep 1
-  second=$(stat -f%z "$1" 2>/dev/null) || return 1
-  [ "$first" = "$second" ] && [ "$first" -gt 0 ]
+# One run at a time: a run can sit waiting out a long recording, and the folder
+# events that arrive meanwhile must not start a second transcode of the same
+# file. mkdir is atomic, so it doubles as the lock.
+readonly LOCK_DIR="$OUT_DIR/.shrink-lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
+# Wait for a file to stop growing.
+#
+# This has to wait rather than skip. A directory watch only fires when an entry
+# is created or removed — appending to an existing file leaves the directory
+# mtime alone — so the run triggered by QuickTime creating the file is the only
+# run that happens, and it starts while the file is still 0 bytes. Skipping it
+# means waiting for some unrelated folder change before the recording is ever
+# converted.
+wait_until_settled() {
+  local file=$1 last=-1 size stable=0 waited=0
+  while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
+    size=$(stat -f%z "$file" 2>/dev/null) || return 1
+    if [ "$size" = "$last" ]; then
+      stable=$((stable + 1))
+      if [ "$stable" -ge "$SETTLE_STABLE_SECONDS" ] && [ "$size" -gt 0 ]; then
+        return 0
+      fi
+    else
+      stable=0
+    fi
+    last=$size
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
 }
 
 audio_args=(-c:a aac -b:a 96k)
@@ -106,7 +136,10 @@ for src in "$SRC_DIR"/*.mov "$SRC_DIR"/*.mp4; do
   if [ "$FORCE" = no ] && [ -e "$out" ] && [ "$out" -nt "$src" ]; then
     continue
   fi
-  is_settled "$src" || continue
+  if ! wait_until_settled "$src"; then
+    echo "shrink-screen-recordings: $src still growing, leaving for a later run" >&2
+    continue
+  fi
 
   if ffmpeg -y -v error -i "$src" \
     -vf "$SCALE,fps=$FPS" \
